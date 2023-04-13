@@ -134,3 +134,4 @@ class KeywordPerformanceAnalyzer:
 
     def __get_revenue(self, events, product):
         return float(product.split(";")[3]) if events == "1" else "0.00"
+    

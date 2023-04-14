@@ -1,7 +1,6 @@
 import boto3
 import io
 import csv
-import tempfile
 import os
 from datetime import datetime
 
@@ -11,17 +10,6 @@ s3 = boto3.client("s3")
 
 destination_bucket = os.environ["DESTINATION_BUCKETNAME"]
 
-
-def lambda_handler(event, context):
-    try:
-        log_analyzer = KeywordPerformanceAnalyzer(event)
-        log_analyzer.analyze()
-        return {
-            "statusCode" : 200,
-            "body" : "Execution Completed Successfully"
-        }
-    except Exception as e:
-        print(f"An error occurred: {e}")
 
 class KeywordPerformanceAnalyzer:
     """
@@ -66,7 +54,7 @@ class KeywordPerformanceAnalyzer:
             response = s3.get_object(Bucket=self.bucket_name, Key=self.object_key)
             contents = response["Body"].read().decode('utf-8')
             file = io.StringIO(contents)
-            output_data = []
+            search_engine_results = []
             data = []
             reader = csv.DictReader(file, delimiter="\t")
             for row in reader:
@@ -78,12 +66,12 @@ class KeywordPerformanceAnalyzer:
                 search_keyword = self.__get_search_keyword(referrer, search_engine_domain)
                 revenue = self.__get_revenue(events, product)
                 if search_engine_domain != "unknown":
-                    output_data.append({'search_engine_domain': search_engine_domain,
+                    search_engine_results.append({'search_engine_domain': search_engine_domain,
                                         'search_keyword': search_keyword,
                                         'revenue': revenue,
                                         'ip': ip})
                 if events == "1":
-                    for i in output_data:
+                    for i in search_engine_results:
                         if ip == i['ip']:
                             search = i['search_engine_domain']
                             keyword = i['search_keyword']
@@ -91,6 +79,7 @@ class KeywordPerformanceAnalyzer:
                                         'Search Keyword': keyword,
                                         'Revenue': revenue
                                         })
+                            break
             merged_data = {}
 
             for item in data:
@@ -106,14 +95,14 @@ class KeywordPerformanceAnalyzer:
             sorted_data = sorted(merged_list, key=lambda x: x['Revenue'], reverse=True)
             file_name = f"{date_str}_SearchKeywordPerformance.tab"
             fieldnames = ['Search Engine Domain', 'Search Keyword', 'Revenue']
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
-                writer = csv.DictWriter(
-                    temp_file, delimiter='\t', fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(sorted_data)
-                temp_file.flush()
-                s3.upload_file(temp_file.name, destination_bucket, file_name)
-            os.unlink(temp_file.name)
+            csv_buffer = io.StringIO()
+            writer = csv.DictWriter(csv_buffer, delimiter='\t', fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(sorted_data)
+            try:
+                s3.put_object(Bucket=destination_bucket, Key=file_name, Body=csv_buffer.getvalue())
+            except Exception as e:
+                print(f"Error uploading file to S3: {e}")
         except KeyError as ke:
             print(f"Invalid document format. Error at {ke}")
 
@@ -127,11 +116,27 @@ class KeywordPerformanceAnalyzer:
     def __get_search_keyword(self, referrer, search_engine_domain):
         for s in referrer.split("&"):
             if search_engine_domain in ["google.com", "bing.com"] and "q=" in s:
+                print(s)
                 return s.split("=")[1]
             elif search_engine_domain == "yahoo.com" and "p=" in s:
+                print(s)
                 return s.split("=")[1]
         return "unknown"
 
     def __get_revenue(self, events, product):
-        return float(product.split(";")[3]) if events == "1" else "0.00"
-    
+        if events == "1":
+            return float(product.split(";")[3])  
+        else:
+            return "0.00"
+
+
+def lambda_handler(event, context):
+    try:
+        log_analyzer = KeywordPerformanceAnalyzer(event)
+        log_analyzer.analyze()
+        return {
+            "statusCode" : 200,
+            "body" : "Execution Completed Successfully"
+        }
+    except Exception as e:
+        print(f"An error occurred: {e}")
